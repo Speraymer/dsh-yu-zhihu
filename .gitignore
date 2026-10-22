@@ -1,0 +1,41 @@
+# 依赖与虚拟环境
+node_modules/
+.venv/
+venv/
+
+# 构建产物
+dist/
+coverage/
+*.tsbuildinfo
+
+# 日志与临时文件
+*.log
+*.tmp
+*.temp
+*.bak
+*.bak.*
+*~
+*.swp
+.DS_Store
+Thumbs.db
+
+# 运行数据（推荐流快照、运行统计、互动台账）
+*.jsonl
+out/
+digest/
+interactions.json
+posts.json
+trusted-commands.json
+run.json
+
+# 本地配置与凭证（Access Secret、扫码登录态都不进仓）
+.env
+.env.*
+!.env.example
+secrets.json
+credentials.json
+cookies.json
+*.local.json
+*.pem
+*.key
+*.p12

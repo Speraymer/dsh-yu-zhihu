@@ -1,0 +1,50 @@
+{
+  "name": "dsh-yu-zhihu",
+  "version": "0.4.0",
+  "description": "DSH 主动刷知乎插件：读取推荐流与评论，按人格限量互动，并把素材接入人格蒸馏。",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Speraymer/dsh-yu-zhihu.git"
+  },
+  "homepage": "https://github.com/Speraymer/dsh-yu-zhihu#readme",
+  "bugs": {
+    "url": "https://github.com/Speraymer/dsh-yu-zhihu/issues"
+  },
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "dsh": ">=0.1.7-rc.1",
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ],
+      "external": [
+        "react"
+      ]
+    }
+  }
+}
