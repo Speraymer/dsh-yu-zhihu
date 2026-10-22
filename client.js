@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-zhihu-scroll',
+  id: 'dsh-yu-zhihu',
   factory: (require) => {
     const React = require('react')
     const h = React.createElement
