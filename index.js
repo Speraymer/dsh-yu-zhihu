@@ -1,3 +1,4 @@
+import { createLogin } from './lib/login.mjs'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -68,6 +69,11 @@ export function apply(ctx) {
   const needsEngagementDefaults = storedConfig.engagementDefaultsV1 !== true
   const needsAutoPostDefault = storedConfig.engagementDefaultsV2 !== true
   let config = { ...DEFAULTS, cliPath, ...storedConfig }
+  const login = createLogin({
+    command: () => ({ file: config.cliPath, args: ['login', '--qrcode', '--json'] }),
+    verify: async () => (await checkZhihu(config)).accountLoggedIn,
+  })
+  ctx.effect(() => () => login.cancel(), 'zhihu-duty login cleanup')
   let running = false
   let posting = false
   let commandChecking = false, lastCommandCheck = 0
@@ -218,6 +224,22 @@ export function apply(ctx) {
 
   const handle = async (req, res, url) => {
     const path = url.pathname
+    if (path === '/api/zhihu-duty/login') {
+      if (req.method === 'GET') return sendJson(res, 200, { ok: true, login: login.snapshot() })
+      if (req.method === 'POST') {
+        if (!/^application\/json(?:;|$)/i.test(req.headers?.['content-type'] || '')) return sendJson(res, 415, { ok: false, error: '请从设置页开始登录' })
+        if (req.headers?.origin && req.headers.origin !== 'dsh-app://app') {
+          let origin
+          try { origin = new URL(req.headers.origin) } catch { return sendJson(res, 403, { ok: false, error: '请求来源无效' }) }
+          if (origin.host !== req.headers.host || !['http:', 'https:'].includes(origin.protocol)) return sendJson(res, 403, { ok: false, error: '请求来源不匹配' })
+        }
+        const body = await readBody(req)
+        if (body.cancel === true) login.cancel()
+        else login.start()
+        return sendJson(res, 200, { ok: true, login: login.snapshot() })
+      }
+      return sendJson(res, 405, { ok: false, error: '登录接口仅支持 GET / POST' })
+    }
     if (req.method === 'GET' && path === '/api/zhihu-duty/status') return sendJson(res, 200, await status())
     if (req.method === 'GET' && path === '/api/zhihu-duty/config') return sendJson(res, 200, { ok: true, config: publicConfig() })
     if (req.method === 'POST' && path === '/api/zhihu-duty/config') {

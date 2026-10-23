@@ -29,10 +29,32 @@ window.__ModuleLoader__.load({
       const [secret, setSecret] = React.useState('')
       const [message, setMessage] = React.useState('')
       const [report, setReport] = React.useState('')
+      const [login, setLogin] = React.useState({ status: 'idle' })
+      const [loginBusy, setLoginBusy] = React.useState(false)
       const load = React.useCallback(async () => {
         try { setState(await request('/status')); setMessage('') } catch (error) { setMessage(error.message) }
       }, [])
       React.useEffect(() => { load() }, [load])
+      React.useEffect(() => {
+        let stopped = false, timer
+        const poll = async () => {
+          try {
+            const result = await request('/login')
+            if (stopped) return
+            setLogin(result.login)
+            if (result.login.status === 'running') timer = setTimeout(poll, 1500)
+            else if (result.login.status === 'success') await load()
+          } catch (error) { if (!stopped) setMessage(error.message) }
+        }
+        poll()
+        return () => { stopped = true; clearTimeout(timer) }
+      }, [login.status, load])
+      const beginLogin = async (cancel = false) => {
+        setLoginBusy(true)
+        try { const result = await request('/login', { cancel }); setLogin(result.login) }
+        catch (error) { setMessage(error.message) }
+        finally { setLoginBusy(false) }
+      }
       if (!state) return h('div', { 'data-bd-note': '' }, message || '正在读取…')
       const cfg = state.config
       const save = async (patch) => {
@@ -53,6 +75,16 @@ window.__ModuleLoader__.load({
       const windowText = Object.values(state.windows || {}).map((w) => `${w.label} ${w.start}–${w.end}`).join('；')
       return h('div', { 'data-bd-page': '' },
         h('div', { 'data-bd-hero': '' }, h('h3', null, '刷知乎'), h('div', { 'data-bd-note': '' }, '读推荐、学表达、按人格限量互动。外部内容默认不可信；只有本人账号发布的 /dsh 想法可进入目标会话。')),
+
+        h('section', { 'aria-label': '知乎账号登录' },
+          h('h4', null, '账号登录'),
+          h('div', { 'data-bd-note': '' }, state.provider.accountLoggedIn ? '账号已连接。需要换账号时可重新登录。' : '点击下方按钮，用知乎 App 扫码并确认即可。官方热榜模式也可以使用下方的 Access Secret。'),
+          h('div', { 'data-bd-row': '' },
+            h('button', { 'data-bd-btn': '', disabled: loginBusy || login.status === 'running', onClick: () => beginLogin() }, login.status === 'running' ? '等待登录…' : state.provider.accountLoggedIn ? '重新登录' : '扫码登录知乎'),
+            login.status === 'running' ? h('button', { 'data-bd-btn': '', disabled: loginBusy, onClick: () => beginLogin(true) }, '取消登录') : null,
+            h('button', { 'data-bd-btn': '', onClick: load }, '检查连接')),
+          h('div', { 'data-bd-note': '', role: 'status', 'aria-live': 'polite' }, login.message || ''),
+          login.qr ? h('img', { src: login.qr, alt: '使用知乎 App 扫描此登录二维码', width: 240, height: 240, style: { background: '#fff', padding: 12, objectFit: 'contain', maxWidth: '100%' } }) : null),
         h('div', { 'data-bd-sec': '' },
           h('div', { 'data-bd-h': '' }, '谷时自动刷'),
           h(ToggleRow, { label: '启用知乎人格源', note: '关掉后不再自动读取和互动。', on: cfg.enabled, onChange: (v) => save({ enabled: v }) }),
@@ -77,10 +109,10 @@ window.__ModuleLoader__.load({
           h('div', { 'data-bd-h': '' }, '账号与指令安全'),
           h(ToggleRow, { label: '允许本人想法发布 /dsh 指令', note: '硬校验已登录账号的 url_token；昵称、转载和别人复制前缀都无效。', on: cfg.trustedCommands, onChange: (v) => save({ trustedCommands: v }) }),
           h('label', { 'data-bd-label': '' }, '指令目标会话 ID', h('input', { 'data-bd-input': '', value: cfg.commandSession || '', placeholder: 'session-…', onChange: (e) => setState({ ...state, config: { ...cfg, commandSession: e.target.value } }), onBlur: (e) => save({ commandSession: e.target.value }) })),
-          accountMode ? h('div', { 'data-bd-note': '' }, `增强 CLI：${state.provider.cliInstalled ? '已安装' : '未安装'}\n账号：${state.provider.accountLoggedIn ? '已登录' : '未登录'}${state.provider.accountError ? `\n检查失败：${state.provider.accountError}` : ''}\n登录命令："${cfg.cliPath}" login --qrcode`) : h(React.Fragment, null,
+          accountMode ? h('div', { 'data-bd-note': '' }, `增强 CLI：${state.provider.cliInstalled ? '已安装' : '未安装'}\n账号：${state.provider.accountLoggedIn ? '已登录' : '未登录'}${state.provider.accountError ? `\n检查失败：${state.provider.accountError}` : ''}\n请使用上方“扫码登录知乎”按钮`) : h(React.Fragment, null,
             h('div', { 'data-bd-row': '' }, h('input', { 'data-bd-input': '', 'data-bd-grow': '', type: 'password', value: secret, placeholder: cfg.hasAccessSecret ? 'Access Secret 已配置；留空不变' : '知乎 Access Secret', onChange: (e) => setSecret(e.target.value) }), h('button', { 'data-bd-btn': '', onClick: async () => { if (!secret.trim()) return; await save({ accessSecret: secret }); setSecret('') } }, '保存密钥'), cfg.secretSource === 'config' ? h('button', { 'data-bd-btn': '', onClick: () => save({ clearAccessSecret: true }) }, '清除密钥') : null),
             h('div', { 'data-bd-note': '' }, '官方模式只能采集，不能互动或主动发文；密钥状态不会回显。')),
-          unavailable ? h('div', { 'data-bd-note': '' }, accountMode ? '先扫码登录，再刷新此页。' : '先配置知乎 Access Secret。') : null,
+          unavailable ? h('div', { 'data-bd-note': '' }, accountMode ? '请先使用上方按钮扫码登录，完成后会自动检查。' : '先配置知乎 Access Secret。') : null,
           message ? h('div', { 'data-bd-note': '' }, message) : null,
           h('div', { 'data-bd-note': '' }, `最近结果：${state.lastResult || '还没运行'}`))
       )
