@@ -1,10 +1,11 @@
 import { createLogin } from './lib/login.mjs'
+import { createBrowserLogin } from './lib/browser-login.mjs'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { cleanText, dueWindow, ensureSourceHome, localDay, remainingToday, storeRun, WINDOWS, writeJsonAtomic } from './lib/core.mjs'
-import { buildEngagementPrompt, buildOriginalArticlePrompt, parseEngagementPlan, recordAttempt } from './lib/engagement.mjs'
+import { cleanText, dueWindow, ensureSourceHome, intervalDue, intervalMinutesOf, localDay, remainingToday, storeRun, storeVoiceSelections, WINDOWS, writeJsonAtomic } from './lib/core.mjs'
+import { buildEngagementPrompt, buildOriginalArticlePrompt, buildPublicPersona, parseEngagementPlan, recordAttempt } from './lib/engagement.mjs'
 import { runPersonaPlanner } from './lib/headless.mjs'
 import { checkZhihu, executeZhihuAction, fetchZhihu, fetchZhihuCommands, prepareZhihuAction } from './lib/provider.mjs'
 import { claimCommands } from './lib/commands.mjs'
@@ -13,11 +14,13 @@ export const name = 'zhihu-scroll'
 export const inject = ['webServer', 'agents']
 
 const DEFAULTS = {
-  enabled: true, autoRun: true, runAt: '21:40', limit: 10, keywords: '', accessSecret: '',
-  peakValley: true, noon: true, night: true, perDay: 10, quotaDay: '', readToday: 0, lastWindowKey: '',
+  enabled: true, autoRun: true, runAt: '21:40', limit: 15, keywords: '', accessSecret: '',
+  peakValley: true, noon: true, night: true, perDay: 40, quotaDay: '', readToday: 0, lastWindowKey: '',
+  intervalMinutes: 0, lastIntervalAt: '',
   sourceMode: 'account', commentLimit: 5, cliPath: '', model: 'deepseek-flash', dshBin: '',
-  autoLike: true, autoComment: true, autoReply: true, autoPost: true, likePerRound: 2, commentPerRound: 1, replyPerRound: 2,
-  engagementDefaultsV1: true, engagementDefaultsV2: true,
+  autoLike: true, autoComment: true, autoReply: true, autoPost: true, autoCollect: true,
+  likePerRound: 6, commentPerRound: 3, replyPerRound: 3, collectPerRound: 3, collectionId: '',
+  engagementDefaultsV1: true, engagementDefaultsV2: true, ownershipV1: true,
   trustedCommands: true, commandSession: '',
   lastRunDay: '', lastRunAt: '', lastResult: '',
 }
@@ -69,10 +72,12 @@ export function apply(ctx) {
   const needsEngagementDefaults = storedConfig.engagementDefaultsV1 !== true
   const needsAutoPostDefault = storedConfig.engagementDefaultsV2 !== true
   let config = { ...DEFAULTS, cliPath, ...storedConfig }
-  const login = createLogin({
+  const qrLogin = createLogin({
     command: () => ({ file: config.cliPath, args: ['login', '--qrcode', '--json'] }),
     verify: async () => (await checkZhihu(config)).accountLoggedIn,
   })
+  const browserLogin = createBrowserLogin({ root, verify: async () => (await checkZhihu(config)).accountLoggedIn })
+  let login = qrLogin
   ctx.effect(() => () => login.cancel(), 'zhihu-duty login cleanup')
   let running = false
   let posting = false
@@ -95,15 +100,22 @@ export function apply(ctx) {
       likePerRound: 2, commentPerRound: 1, replyPerRound: 2, engagementDefaultsV1: true,
     })
     if (needsAutoPostDefault) save({ autoPost: true, engagementDefaultsV2: true })
+    if (storedConfig.ownershipV1 !== true) save({
+      autoCollect: true, collectPerRound: 3, likePerRound: 6, commentPerRound: 3, replyPerRound: 3,
+      perDay: 40, limit: 15, ownershipV1: true,
+    })
   }
 
   const publicConfig = () => ({
     enabled: config.enabled, autoRun: config.autoRun, runAt: config.runAt, limit: config.limit,
     peakValley: config.peakValley, noon: config.noon, night: config.night, perDay: config.perDay,
+    intervalMinutes: config.intervalMinutes, lastIntervalAt: config.lastIntervalAt,
     readToday: config.quotaDay === localDay() ? Number(config.readToday) || 0 : 0,
     keywords: config.keywords, sourceMode: config.sourceMode, commentLimit: config.commentLimit, cliPath: config.cliPath,
     autoLike: config.autoLike, autoComment: config.autoComment, autoReply: config.autoReply, autoPost: config.autoPost,
+    autoCollect: config.autoCollect, collectionId: config.collectionId,
     likePerRound: config.likePerRound, commentPerRound: config.commentPerRound, replyPerRound: config.replyPerRound,
+    collectPerRound: config.collectPerRound,
     trustedCommands: config.trustedCommands, commandSession: config.commandSession,
     hasAccessSecret: Boolean(process.env.ZHIHU_ACCESS_SECRET || config.accessSecret),
     secretSource: process.env.ZHIHU_ACCESS_SECRET ? 'environment' : config.accessSecret ? 'config' : 'none',
@@ -113,8 +125,7 @@ export function apply(ctx) {
     const file = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'AGENTS.md')
     try {
       const text = readFileSync(file, 'utf8')
-      const learned = /<!-- AUTO:BEGIN -->([\s\S]*?)<!-- AUTO:END -->/.exec(text)
-      return (learned ? learned[1] : '').trim().slice(0, 12000)
+      return buildPublicPersona(text)
     } catch { return '' }
   }
 
@@ -153,12 +164,14 @@ export function apply(ctx) {
     const output = await runPersonaPlanner(root, config, built.prompt)
     const actions = parseEngagementPlan(output, items, config, history)
     let succeeded = 0, failed = ''
+    const succeededActions = []
     for (const action of actions) {
       history = recordAttempt(history, action, 'started')
       writeJsonAtomic(interactionFile, history)
       try {
         await executeZhihuAction(config, action)
         succeeded += 1
+        succeededActions.push(action)
         log(`engage kind=${action.kind} type=${action.targetType} target=${action.targetId} ok`)
       } catch (error) {
         failed = cleanText(error?.message || error, 300)
@@ -166,6 +179,8 @@ export function apply(ctx) {
         break
       }
     }
+    try { storeVoiceSelections(root, '知乎', items, succeededActions) }
+    catch (error) { log(`voice-store error=${cleanText(error?.message || error, 200)}`) }
     appendFileSync(join(root, 'out', `${localDay()}.md`), `- 自动互动：计划 ${actions.length}，成功 ${succeeded}${failed ? `，停止：${failed}` : ''}\n`, 'utf8')
     return { attempted: actions.length, succeeded, error: failed }
   }
@@ -196,7 +211,11 @@ export function apply(ctx) {
     if (running) return { ok: false, busy: true, error: '上一轮还在运行' }
     if (!config.enabled) return { ok: false, error: '刷知乎已停用' }
     const remaining = reason === 'manual' ? Math.max(1, Math.min(Number(config.limit) || 10, 30)) : remainingToday(config)
-    if (remaining <= 0) return { ok: true, skipped: true, read: 0, added: 0, error: '今天的自动浏览额度已用完' }
+    if (remaining <= 0) {
+      // 额度用完也要留痕，否则看起来像定时器根本没跑。
+      log(`run skipped reason=${reason} quota readToday=${config.readToday}/${config.perDay}`)
+      return { ok: true, skipped: true, read: 0, added: 0, error: '今天的自动浏览额度已用完' }
+    }
     running = true
     try {
       const items = await fetchZhihu({ ...config, limit: Math.min(Number(config.limit) || 10, remaining) })
@@ -205,7 +224,7 @@ export function apply(ctx) {
       const engagement = await engage(items)
       const now = new Date()
       const day = localDay(now), used = config.quotaDay === day ? Number(config.readToday) || 0 : 0
-      save({ ...(reason === 'manual' ? {} : { quotaDay: day, readToday: used + result.read }), ...(windowKey ? { lastWindowKey: windowKey } : {}), lastRunDay: day, lastRunAt: now.toISOString(), lastResult: `${reason}：新增 ${result.added}/${result.read}，互动 ${engagement.succeeded}/${engagement.attempted}，可信指令 ${commandCount}` })
+      save({ ...(reason === 'manual' ? {} : { quotaDay: day, readToday: used + result.read }), ...(windowKey ? { lastWindowKey: windowKey } : {}), ...(reason === 'interval' ? { lastIntervalAt: now.toISOString() } : {}), lastRunDay: day, lastRunAt: now.toISOString(), lastResult: `${reason}：新增 ${result.added}/${result.read}，互动 ${engagement.succeeded}/${engagement.attempted}，可信指令 ${commandCount}` })
       log(`run reason=${reason} read=${result.read} added=${result.added} engagement=${engagement.succeeded}/${engagement.attempted}`)
       return { ok: true, ...result, engagement }
     } catch (error) {
@@ -235,7 +254,11 @@ export function apply(ctx) {
         }
         const body = await readBody(req)
         if (body.cancel === true) login.cancel()
-        else login.start()
+        else {
+          if (body.method != null && !['browser', 'qr'].includes(body.method)) return sendJson(res, 400, { ok: false, error: '不支持的登录方式' })
+          if (login.snapshot().status !== 'running') login = body.method === 'browser' ? browserLogin : qrLogin
+          login.start()
+        }
         return sendJson(res, 200, { ok: true, login: login.snapshot() })
       }
       return sendJson(res, 405, { ok: false, error: '登录接口仅支持 GET / POST' })
@@ -249,8 +272,12 @@ export function apply(ctx) {
       if ('peakValley' in body) patch.peakValley = body.peakValley === true
       if ('noon' in body) patch.noon = body.noon === true
       if ('night' in body) patch.night = body.night === true
-      if ('perDay' in body) patch.perDay = Math.max(0, Math.min(80, Number(body.perDay) || 0))
-      if ('limit' in body) patch.limit = Math.max(1, Math.min(30, Number(body.limit) || 10))
+      if ('perDay' in body) patch.perDay = Math.max(0, Math.min(3000, Number(body.perDay) || 0))
+      if ('intervalMinutes' in body) {
+        const minutes = Math.floor(Number(body.intervalMinutes) || 0)
+        patch.intervalMinutes = minutes <= 0 ? 0 : Math.min(1440, Math.max(5, minutes))
+      }
+      if ('limit' in body) patch.limit = Math.max(1, Math.min(50, Number(body.limit) || 10))
       if ('keywords' in body) patch.keywords = cleanText(body.keywords, 200)
       if ('sourceMode' in body) {
         if (!['official', 'account'].includes(body.sourceMode)) return sendJson(res, 400, { ok: false, error: '读取模式无效' })
@@ -258,12 +285,14 @@ export function apply(ctx) {
       }
       if ('commentLimit' in body) patch.commentLimit = Math.max(0, Math.min(5, Number(body.commentLimit) || 0))
       if ('cliPath' in body) patch.cliPath = cleanText(body.cliPath, 500)
-      for (const key of ['autoLike', 'autoComment', 'autoReply', 'autoPost']) if (key in body) patch[key] = body[key] === true
+      for (const key of ['autoLike', 'autoComment', 'autoReply', 'autoPost', 'autoCollect']) if (key in body) patch[key] = body[key] === true
       if ('trustedCommands' in body) patch.trustedCommands = body.trustedCommands === true
       if ('commandSession' in body) patch.commandSession = cleanText(body.commandSession, 120)
-      if ('likePerRound' in body) patch.likePerRound = Math.max(0, Math.min(5, Number(body.likePerRound) || 0))
-      if ('commentPerRound' in body) patch.commentPerRound = Math.max(0, Math.min(3, Number(body.commentPerRound) || 0))
-      if ('replyPerRound' in body) patch.replyPerRound = Math.max(0, Math.min(3, Number(body.replyPerRound) || 0))
+      if ('collectionId' in body) patch.collectionId = cleanText(body.collectionId, 32).replace(/\D/g, '')
+      if ('likePerRound' in body) patch.likePerRound = Math.max(0, Math.min(20, Number(body.likePerRound) || 0))
+      if ('commentPerRound' in body) patch.commentPerRound = Math.max(0, Math.min(10, Number(body.commentPerRound) || 0))
+      if ('replyPerRound' in body) patch.replyPerRound = Math.max(0, Math.min(10, Number(body.replyPerRound) || 0))
+      if ('collectPerRound' in body) patch.collectPerRound = Math.max(0, Math.min(10, Number(body.collectPerRound) || 0))
       if ('accessSecret' in body && String(body.accessSecret).trim()) patch.accessSecret = String(body.accessSecret).trim()
       if (body.clearAccessSecret === true) patch.accessSecret = ''
       save(patch)
@@ -276,7 +305,6 @@ export function apply(ctx) {
     }
     if (req.method === 'POST' && path === '/api/zhihu-duty/action') {
       const body = await readBody(req)
-      if (body.kind === 'reply') return sendJson(res, 400, { ok: false, error: '回复由定时人格轮统一处理，才能强制执行每人每内容最多两轮' })
       const provider = await checkZhihu(config)
       if (!provider.cliInstalled || !provider.accountLoggedIn) return sendJson(res, 409, { ok: false, error: '增强 CLI 尚未安装或账号未登录' })
       let prepared
@@ -308,8 +336,14 @@ export function apply(ctx) {
   }), 'zhihu-duty api')
 
   const timer = setInterval(() => {
-    const windowKey = dueWindow(config)
-    if (windowKey && !running) void run('scheduled', windowKey)
+    // 设了「每 N 分钟」就按间隔跑（只在谷时里），否则沿用原来的两个固定窗口。
+    // 额度用完时不再每分钟空转写日志：直接等额度（跨天或调大上限后自然恢复）。
+    if (intervalMinutesOf(config) > 0) {
+      if (!running && remainingToday(config) > 0 && intervalDue(config)) void run('interval')
+    } else {
+      const windowKey = dueWindow(config)
+      if (windowKey && !running) void run('scheduled', windowKey)
+    }
     if (Date.now() - lastCommandCheck >= 5 * 60_000) { lastCommandCheck = Date.now(); void dispatchCommands() }
   }, 60_000)
   if (timer.unref) timer.unref()

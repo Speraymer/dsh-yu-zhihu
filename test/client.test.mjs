@@ -46,6 +46,9 @@ test('login button starts authorization and renders its progress and cancel acti
     const flatten = (node) => typeof node === 'object' ? [node, ...node.children.flatMap(flatten)] : []
     let tree = render()
     let nodes = flatten(tree)
+    const browserButton = nodes.find((n) => n.type === 'button' && n.children.includes('浏览器登录（推荐）'))
+    assert.ok(browserButton); await browserButton.props.onClick()
+    assert.deepEqual(JSON.parse(requests.shift().options.body), { cancel: false, method: 'browser' })
     const button = nodes.find((n) => n.type === 'button' && n.children.includes('扫码登录知乎'))
     assert.ok(button); await button.props.onClick()
     assert.equal(requests.length, 1); assert.equal(requests[0].url, '/api/zhihu-duty/login')

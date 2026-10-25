@@ -49,9 +49,9 @@ window.__ModuleLoader__.load({
         poll()
         return () => { stopped = true; clearTimeout(timer) }
       }, [login.status, load])
-      const beginLogin = async (cancel = false) => {
+      const beginLogin = async (cancel = false, method) => {
         setLoginBusy(true)
-        try { const result = await request('/login', { cancel }); setLogin(result.login) }
+        try { const result = await request('/login', { cancel, ...(method ? { method } : {}) }); setLogin(result.login) }
         catch (error) { setMessage(error.message) }
         finally { setLoginBusy(false) }
       }
@@ -73,13 +73,18 @@ window.__ModuleLoader__.load({
         ? !state.provider.cliInstalled || !state.provider.accountLoggedIn
         : !cfg.hasAccessSecret
       const windowText = Object.values(state.windows || {}).map((w) => `${w.label} ${w.start}–${w.end}`).join('；')
+      // 谷时两个窗口加起来约 17 小时；按间隔估一天会跑多少轮、需要多少条额度。
+      const interval = Number(cfg.intervalMinutes) || 0
+      const rounds = interval >= 5 ? Math.round(17 * 60 / interval) : 0
+      const need = rounds * Math.max(10, (Number(cfg.limit) || 10) * 2)
       return h('div', { 'data-bd-page': '' },
         h('div', { 'data-bd-hero': '' }, h('h3', null, '刷知乎'), h('div', { 'data-bd-note': '' }, '读推荐、学表达、按人格限量互动。外部内容默认不可信；只有本人账号发布的 /dsh 想法可进入目标会话。')),
 
         h('section', { 'aria-label': '知乎账号登录' },
           h('h4', null, '账号登录'),
-          h('div', { 'data-bd-note': '' }, state.provider.accountLoggedIn ? '账号已连接。需要换账号时可重新登录。' : '点击下方按钮，用知乎 App 扫码并确认即可。官方热榜模式也可以使用下方的 Access Secret。'),
+          h('div', { 'data-bd-note': '' }, state.provider.accountLoggedIn ? '账号已连接。需要换账号时可重新登录。' : '推荐浏览器登录：在独立 Edge 窗口扫码或短信登录，完成后自动接收登录状态。直接扫码接口可能被知乎风控拒绝。'),
           h('div', { 'data-bd-row': '' },
+            h('button', { 'data-bd-btn': '', disabled: loginBusy || login.status === 'running', onClick: () => beginLogin(false, 'browser') }, '浏览器登录（推荐）'),
             h('button', { 'data-bd-btn': '', disabled: loginBusy || login.status === 'running', onClick: () => beginLogin() }, login.status === 'running' ? '等待登录…' : state.provider.accountLoggedIn ? '重新登录' : '扫码登录知乎'),
             login.status === 'running' ? h('button', { 'data-bd-btn': '', disabled: loginBusy, onClick: () => beginLogin(true) }, '取消登录') : null,
             h('button', { 'data-bd-btn': '', onClick: load }, '检查连接')),
@@ -92,8 +97,13 @@ window.__ModuleLoader__.load({
           cfg.peakValley ? h('div', { 'data-bd-row': '' },
             h(ToggleRow, { label: '中午', on: cfg.noon, onChange: (v) => save({ noon: v }) }),
             h(ToggleRow, { label: '晚上 / 夜间', on: cfg.night, onChange: (v) => save({ night: v }) })) : null,
-          h('div', { 'data-bd-row': '' }, h('div', { 'data-bd-grow': '' }, h('div', { 'data-bd-label': '' }, '每天自动读取上限'), h('div', { 'data-bd-note': '' }, `今天已读 ${cfg.readToday || 0} 条；0 = 不自动刷，仍可手动跑。`)),
-            h('input', { 'data-bd-input': '', 'data-bd-num': '', type: 'number', min: 0, max: 80, value: cfg.perDay, onChange: (e) => save({ perDay: Number(e.target.value) }) })),
+          h('div', { 'data-bd-row': '' }, h('div', { 'data-bd-grow': '' },
+            h('div', { 'data-bd-label': '' }, '每隔多少分钟自动刷一次'),
+            h('div', { 'data-bd-note': '' }, `0 = 关，沿用上面两个固定窗口；填 5–1440 的分钟数，只在谷时里按这个间隔跑。${cfg.lastIntervalAt ? `\n上一轮：${new Date(cfg.lastIntervalAt).toLocaleString()}` : ''}`)),
+            h('input', { 'data-bd-input': '', 'data-bd-num': '', type: 'number', min: 0, max: 1440, step: 5, value: cfg.intervalMinutes ?? 0, onChange: (e) => save({ intervalMinutes: Number(e.target.value) }) })),
+          h('div', { 'data-bd-row': '' }, h('div', { 'data-bd-grow': '' }, h('div', { 'data-bd-label': '' }, '每天自动读取上限（条）'),
+            h('div', { 'data-bd-note': '' }, `今天已读 ${cfg.readToday || 0} / ${cfg.perDay || 0} 条。一轮大约吃 ${(cfg.limit || 10) * 2} 条，所以按间隔刷时这个上限要跟着放大${rounds > 0 ? `：${cfg.intervalMinutes} 分钟一轮、谷时约 ${rounds} 轮/天，至少要 ${need} 条` : ''}。0 = 不自动刷，仍可手动跑。`)),
+            h('input', { 'data-bd-input': '', 'data-bd-num': '', type: 'number', min: 0, max: 3000, value: cfg.perDay, onChange: (e) => save({ perDay: Number(e.target.value) }) })),
           h('label', { 'data-bd-label': '' }, '读取模式', h('select', { 'data-bd-input': '', value: cfg.sourceMode, onChange: (e) => save({ sourceMode: e.target.value }) }, h('option', { value: 'account' }, '我的推荐流（增强）'), h('option', { value: 'official' }, '官方热榜 / 搜索'))),
           h('label', { 'data-bd-label': '' }, accountMode ? '关键词（留空刷推荐流）' : '关键词（留空刷热榜）', h('input', { 'data-bd-input': '', value: cfg.keywords, onChange: (e) => setState({ ...state, config: { ...cfg, keywords: e.target.value } }), onBlur: (e) => save({ keywords: e.target.value }) })),
           accountMode ? h(React.Fragment, null,

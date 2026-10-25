@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildEngagementPrompt, buildOriginalArticlePrompt, parseEngagementPlan, recordAttempt } from '../lib/engagement.mjs'
+import { buildEngagementPrompt, buildOriginalArticlePrompt, buildPublicPersona, parseEngagementPlan, recordAttempt } from '../lib/engagement.mjs'
 import { trustedCommand } from '../lib/commands.mjs'
 
 const items = [
@@ -64,4 +64,24 @@ test('the one-click article prompt asks for one bounded article only', () => {
   assert.match(prompt, /自己决定一个.*主题/)
   assert.match(prompt, /"type":"article"/)
   assert.doesNotMatch(prompt, /<ZH_CONTENT>/)
+})
+
+test('public planner receives hand-written principles and learned style without private internals', () => {
+  const agents = [
+    '<!-- HAND:BEGIN 手写段 -->',
+    '## 我是谁', '账号叫不该公开',
+    '## 我怎么说话', '- 闲聊收短',
+    '## 我的判断', '- 不确定就承认',
+    '## 我去哪儿学', '- C:\\Users\\ASUS\\.dsh\\voice.md',
+    '## 红线', '- 不编造事实', '- 主人的隐私不能说', '- 删除、覆盖、提交、付款、发布这类操作，先确认。',
+    '<!-- HAND:END -->',
+    '<!-- AUTO:BEGIN -->', '- 接梗往前推一步 · voice.md:14', '- QQ 私聊记录不要外传', '<!-- AUTO:END -->',
+  ].join('\n')
+  const persona = buildPublicPersona(agents)
+  const prompt = buildEngagementPrompt(items, persona, cfg).prompt
+  assert.match(prompt, /我怎么说话[\s\S]*闲聊收短/)
+  assert.match(prompt, /我的判断[\s\S]*不确定就承认/)
+  assert.match(prompt, /红线[\s\S]*不编造事实/)
+  assert.match(prompt, /接梗往前推一步/)
+  assert.doesNotMatch(prompt, /账号叫不该公开|C:\\Users|voice\.md|QQ 私聊|主人|发布这类操作，先确认/)
 })

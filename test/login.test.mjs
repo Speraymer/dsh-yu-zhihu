@@ -1,15 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, writeFileSync, utimesSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, utimesSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createLogin } from '../lib/login.mjs'
+import { createLogin, stopLoginProcess } from '../lib/login.mjs'
 
 function fixture(options = {}) {
   const children = []
   const login = createLogin({
     command: () => ({ file: 'mock-cli', args: ['login'] }), verify: async () => true,
+    qrFile: join(mkdtempSync(join(tmpdir(), 'zhihu-qr-')), 'images', 'qr.png'),
     launch: (file, args, settings) => {
       assert.equal(file, 'mock-cli'); assert.equal(settings.shell, false)
       assert.equal(settings.windowsHide, true)
@@ -64,4 +65,40 @@ test('only fresh fixed-path PNG is displayed; old QR is never reused', () => {
   writeFileSync(file, png); assert.match(login.snapshot().qr, /^data:image\/png;base64,/)
   login.cancel(); assert.equal(login.snapshot().qr, undefined)
   login.start(); assert.equal(login.snapshot().qr, undefined); login.cancel()
+})
+
+test('Windows cancellation targets only the login process tree and ignores finished children', () => {
+  let call, killed = 0
+  const child = { pid: 12345, exitCode: null, kill: () => { killed++ } }
+  const killer = new EventEmitter()
+  stopLoginProcess(child, (...args) => { call = args; return killer }, 'win32')
+  assert.equal(call[0], 'taskkill.exe')
+  assert.deepEqual(call[1], ['/PID', '12345', '/T', '/F'])
+  assert.equal(call[2].shell, false)
+  assert.equal(call[2].windowsHide, true)
+  killer.emit('error', Error('mock missing taskkill')); assert.equal(killed, 1)
+  stopLoginProcess({ ...child, exitCode: 0 }, () => { throw Error('must not kill reused PID') }, 'win32')
+})
+
+test('creates QR directory before CLI starts and reports unwritable paths', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'zhihu-qr-dir-'))
+  const qrFile = join(dir, 'new', 'qr.png')
+  const { login } = fixture({ qrFile })
+  login.start(); assert.ok(existsSync(join(dir, 'new'))); login.cancel()
+  const file = join(dir, 'file'); writeFileSync(file, 'keep')
+  const broken = fixture({ qrFile: join(file, 'qr.png') })
+  broken.login.start()
+  assert.equal(broken.children.length, 0)
+  assert.match(broken.login.snapshot().message, /目录写入权限/)
+})
+
+test('reports QR polling rejection without leaking CLI output or leaving a dead QR', async () => {
+  const { login, children } = fixture()
+  login.start()
+  children[0].stderr.emit('data', Buffer.from('secret-cookie QR login polling rej'))
+  children[0].stderr.emit('data', Buffer.from('ected (403); secret-token'))
+  children[0].emit('close', 1); await tick()
+  assert.match(login.snapshot().message, /风控/)
+  assert.equal(login.snapshot().qr, undefined)
+  assert.ok(!JSON.stringify(login.snapshot()).includes('secret'))
 })
