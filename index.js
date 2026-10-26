@@ -17,7 +17,7 @@ const DEFAULTS = {
   enabled: true, autoRun: true, runAt: '21:40', limit: 15, keywords: '', accessSecret: '',
   peakValley: true, noon: true, night: true, perDay: 40, quotaDay: '', readToday: 0, lastWindowKey: '',
   intervalMinutes: 0, lastIntervalAt: '',
-  sourceMode: 'account', commentLimit: 5, cliPath: '', model: 'deepseek-flash', dshBin: '',
+  sourceMode: 'account', commentLimit: 5, cliPath: '', model: 'deepseek-flash', provider: 'deepseek-account', dshBin: '',
   autoLike: true, autoComment: true, autoReply: true, autoPost: true, autoCollect: true,
   likePerRound: 6, commentPerRound: 3, replyPerRound: 3, collectPerRound: 3, collectionId: '',
   engagementDefaultsV1: true, engagementDefaultsV2: true, ownershipV1: true,
