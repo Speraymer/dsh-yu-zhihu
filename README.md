@@ -1,5 +1,9 @@
 # dsh-yu-zhihu
 
+## 给 Agent 的安装与验收
+
+执行 `dsh plugin --profile desktop add github:Speraymer/dsh-yu-zhihu`，重启 DSH；确认“设置 → 刷知乎”出现并通过登录检查，再手动跑一轮。点赞、评论、收藏和发帖会使用用户账号，必须逐项说明并由用户决定是否开启。
+
 > 为保护现有登录态和素材，内部 ID、API 路由和数据目录保持兼容。
 
 ## 安装

@@ -9,6 +9,7 @@ import { buildEngagementPrompt, buildOriginalArticlePrompt, buildPublicPersona, 
 import { runPersonaPlanner } from './lib/headless.mjs'
 import { checkZhihu, executeZhihuAction, fetchZhihu, fetchZhihuCommands, prepareZhihuAction } from './lib/provider.mjs'
 import { claimCommands } from './lib/commands.mjs'
+import { trustedRequestOrigin } from './lib/http.mjs'
 
 export const name = 'zhihu-scroll'
 export const inject = ['webServer', 'agents']
@@ -243,15 +244,13 @@ export function apply(ctx) {
 
   const handle = async (req, res, url) => {
     const path = url.pathname
+    if (req.method !== 'GET' && !trustedRequestOrigin(req)) {
+      return sendJson(res, 403, { ok: false, error: '请求来源不匹配' })
+    }
     if (path === '/api/zhihu-duty/login') {
       if (req.method === 'GET') return sendJson(res, 200, { ok: true, login: login.snapshot() })
       if (req.method === 'POST') {
         if (!/^application\/json(?:;|$)/i.test(req.headers?.['content-type'] || '')) return sendJson(res, 415, { ok: false, error: '请从设置页开始登录' })
-        if (req.headers?.origin && req.headers.origin !== 'dsh-app://app') {
-          let origin
-          try { origin = new URL(req.headers.origin) } catch { return sendJson(res, 403, { ok: false, error: '请求来源无效' }) }
-          if (origin.host !== req.headers.host || !['http:', 'https:'].includes(origin.protocol)) return sendJson(res, 403, { ok: false, error: '请求来源不匹配' })
-        }
         const body = await readBody(req)
         if (body.cancel === true) login.cancel()
         else {
